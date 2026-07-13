@@ -4,7 +4,7 @@
  * For platforms where Rust's `struct stat` is inaccurate, the key parameters can be
  * acquired using the following C script, to be compiled using `clang -std=c11`.
  *
- * ```
+ * ```c
  * #include <stdio.h>
  * #include <stddef.h>
  * #include <stdalign.h>

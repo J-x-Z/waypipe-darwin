@@ -226,10 +226,15 @@ where
  * errors and is most convenient if the write is certain to succeed. Example use:
  *
  * ```
+ * use std::io::Write;
+ * use mainloop::util::write_with_buffer;
+ *
+ * let number = 42;
  * let mut buf = [0u8; 256];
- * let slice = write_with_buffer(&mut buf, &|x: &mut &mut [u8]| {
+ * let slice = write_with_buffer(&mut buf, |x: &mut &mut [u8]| {
  *     write!(x, "{}", number).expect("buffer should be long enough")
  * });
+ * assert_eq!(slice, b"42");
  * ```
  */
 pub fn write_with_buffer<F: Fn(&mut &mut [u8])>(b: &mut [u8], f: F) -> &[u8] {

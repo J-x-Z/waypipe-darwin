@@ -28,7 +28,6 @@ version = '"@0@"'.format(raw_version)
 if get_option('build_rs')
     cargo = find_program('cargo', native: true)
     sh = find_program('sh', native: true)
-    objcopy = find_program('objcopy', native: true)
 
     # Because meson and cargo interact badly, option implementation and dependency resolution are deferred to cargo
     # However, to 'autodetect' what features are available, we duplicate some of the build logic
@@ -198,6 +197,7 @@ if get_option('build_rs')
         ],
         timeout: 200,
         priority: 100,
+        is_parallel: false,
     )
 
     test(
@@ -208,6 +208,7 @@ if get_option('build_rs')
             ' '.join([binary.full_path(), '--test-fast-bench', 'bench']),
         ],
         depends: binary,
+        is_parallel: false,
     )
 endif
 
