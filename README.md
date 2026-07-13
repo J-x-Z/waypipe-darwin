@@ -1,5 +1,9 @@
-Waypipe
+Waypipe-Darwin
 ================================================================================
+
+This fork keeps Waypipe usable as a native macOS client while staying close to
+the upstream 0.11 codebase. The Darwin-specific work covers shared memory,
+Unix sockets, process handling, and the transport path used by Cocoa-Way.
 
 `waypipe` is a proxy for [Wayland][l0] clients. It forwards Wayland messages and
 serializes changes to shared memory buffers over a single socket. This makes
@@ -7,6 +11,13 @@ application forwarding similar to [`ssh -X`][l1] feasible.
 
 [l0]: https://wayland.freedesktop.org/
 [l1]: https://wiki.archlinux.org/title/OpenSSH#X11_forwarding
+
+## Install on macOS
+
+```bash
+brew tap J-x-Z/tap
+brew install waypipe-darwin
+```
 
 ## Usage
 
