@@ -3,6 +3,7 @@
 use clap::{value_parser, Arg, ArgAction, Command};
 use log::{debug, error, Log, Record};
 use nix::errno::Errno;
+#[cfg(target_os = "linux")]
 use nix::libc;
 use nix::poll::{PollFd, PollFlags};
 use nix::sys::{signal, socket, stat, wait};
@@ -1277,6 +1278,8 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
                 continue;
             }
         };
+        #[cfg(not(target_os = "linux"))]
+        let _ = &abstract_socket;
 
         return Ok((
             XSocketInfo {

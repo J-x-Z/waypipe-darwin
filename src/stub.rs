@@ -133,10 +133,10 @@ mod dmabuf_stub {
         pub fn complete_write(self: &VulkanBuffer) -> Result<(), &'static str> {
             unreachable!();
         }
-        pub fn get_read_view(self: &VulkanBuffer) -> VulkanBufferReadView {
+        pub fn get_read_view(self: &VulkanBuffer) -> VulkanBufferReadView<'_> {
             unreachable!();
         }
-        pub fn get_write_view(self: &VulkanBuffer) -> VulkanBufferWriteView {
+        pub fn get_write_view(self: &VulkanBuffer) -> VulkanBufferWriteView<'_> {
             unreachable!();
         }
     }
@@ -166,7 +166,7 @@ mod dmabuf_stub {
         pub fn get_device(&self) -> u64 {
             unreachable!();
         }
-        pub fn get_event_fd(&self, timeline_point: u64) -> Result<Option<BorrowedFd>, String> {
+        pub fn get_event_fd(&self, timeline_point: u64) -> Result<Option<BorrowedFd<'_>>, String> {
             unreachable!();
         }
         pub fn get_current_timeline_pt(&self) -> Result<u64, String> {
@@ -217,13 +217,13 @@ mod dmabuf_stub {
             unreachable!();
         }
 
-        pub fn get_event_fd(self: &VulkanTimelineSemaphore) -> BorrowedFd {
+        pub fn get_event_fd(self: &VulkanTimelineSemaphore) -> BorrowedFd<'_> {
             unreachable!();
         }
         pub fn link_event_fd(
             self: &VulkanTimelineSemaphore,
             timeline_point: u64,
-        ) -> Result<BorrowedFd, String> {
+        ) -> Result<BorrowedFd<'_>, String> {
             unreachable!();
         }
         pub fn signal_timeline_pt(self: &VulkanTimelineSemaphore, pt: u64) -> Result<(), String> {
