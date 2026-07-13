@@ -5,11 +5,13 @@ class WaypipeDarwin < Formula
   version "0.11.0-darwin"
   head "https://github.com/J-x-Z/waypipe-darwin.git", branch: "main"
 
+  depends_on "bindgen" => :build
   depends_on "rust" => :build
   depends_on "lz4"
   depends_on "zstd"
 
   def install
+    ENV.prepend_path "PATH", Formula["bindgen"].opt_bin
     ENV.prepend_path "PATH", Formula["rust"].opt_bin
     ENV.prepend_path "PKG_CONFIG_PATH", Formula["lz4"].opt_lib/"pkgconfig"
     ENV.prepend_path "PKG_CONFIG_PATH", Formula["zstd"].opt_lib/"pkgconfig"
