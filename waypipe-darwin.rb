@@ -9,8 +9,6 @@ class WaypipeDarwin < Formula
   depends_on "lz4"
   depends_on "zstd"
 
-  conflicts_with "waypipe", because: "both install a waypipe binary"
-
   def install
     system "cargo", "install", *std_cargo_args,
            "--no-default-features", "--features", "lz4,zstd"
