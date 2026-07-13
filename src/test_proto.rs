@@ -15,7 +15,7 @@
 use clap::{value_parser, Arg, ArgAction, Command as ClapCommand};
 use nix::libc;
 use nix::sys::wait::WaitStatus;
-use nix::sys::{memfd, signal, socket, time, wait};
+use nix::sys::{signal, socket, time, wait};
 use nix::{errno::Errno, fcntl, poll, unistd};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -193,7 +193,7 @@ fn test_interact(
             "connections should not close before error or end message received"
         );
 
-        let res = nix::poll::ppoll(&mut pfds, Some(remaining), None);
+        let res = system_poll(&mut pfds, Some(remaining), None);
         if let Err(e) = res {
             assert!(e == Errno::EINTR || e == Errno::EAGAIN);
         }
@@ -392,7 +392,7 @@ fn test_write_msgs(socket: &OwnedFd, data: &[u8], fds: &[&OwnedFd]) {
             panic!("timeout: {:?}", elapsed);
         }
         let remaining = time::TimeSpec::from_duration(timeout.saturating_sub(elapsed));
-        let res = nix::poll::ppoll(&mut pfd, Some(remaining), None);
+        let res = system_poll(&mut pfd, Some(remaining), None);
         if let Err(e) = res {
             assert!(e == Errno::EINTR || e == Errno::EAGAIN);
         }
@@ -521,7 +521,7 @@ fn test_read_msgs(
             panic!("timeout: {:?}", elapsed);
         }
         let remaining = time::TimeSpec::from_duration(timeout.saturating_sub(elapsed));
-        let res = nix::poll::ppoll(&mut pfds, Some(remaining), None);
+        let res = system_poll(&mut pfds, Some(remaining), None);
         if let Err(e) = res {
             assert!(e == Errno::EINTR || e == Errno::EAGAIN);
         }
@@ -718,27 +718,11 @@ fn run_protocol_test_with_opts(
     opts_server: &WaypipeOptions,
     test_fn: &dyn Fn(ProtocolTestContext),
 ) -> Result<(), StatusBad> {
-    let (channel1, channel2) = socket::socketpair(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        None,
-        socket::SockFlag::SOCK_CLOEXEC,
-    )
-    .unwrap();
-    let (prog_appl1, prog_appl2) = socket::socketpair(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        None,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-    )
-    .unwrap();
-    let (prog_comp1, prog_comp2) = socket::socketpair(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        None,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-    )
-    .unwrap();
+    let (channel1, channel2) = create_socketpair(fcntl::OFlag::O_CLOEXEC).unwrap();
+    let (prog_appl1, prog_appl2) =
+        create_socketpair(fcntl::OFlag::O_NONBLOCK | fcntl::OFlag::O_CLOEXEC).unwrap();
+    let (prog_comp1, prog_comp2) =
+        create_socketpair(fcntl::OFlag::O_NONBLOCK | fcntl::OFlag::O_CLOEXEC).unwrap();
 
     let client_args = build_arguments(info.waypipe_client, opts_client, true);
     let server_args = build_arguments(info.waypipe_server, opts_server, false);
@@ -844,11 +828,8 @@ fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
 
 /** Return a memfd whose contents are precisely `data`. */
 fn make_file_with_contents(data: &[u8]) -> Result<OwnedFd, String> {
-    let local_fd = memfd::memfd_create(
-        c"/waypipe",
-        memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
-    )
-    .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
+    let local_fd =
+        create_anon_file().map_err(|x| tag!("Failed to create shared-memory file: {:?}", x))?;
     unistd::ftruncate(&local_fd, data.len().try_into().unwrap())
         .map_err(|x| tag!("Failed to resize memfd: {:?}", x))?;
 
@@ -1356,7 +1337,7 @@ fn check_pipe_transfer(
             panic!("timeout: {:?}", elapsed);
         }
         let remaining = time::TimeSpec::from_duration(timeout.saturating_sub(elapsed));
-        let ret = poll::ppoll(&mut pfds, Some(remaining), None);
+        let ret = system_poll(&mut pfds, Some(remaining), None);
         if let Err(e) = ret {
             assert!(e == Errno::EINTR);
         }
@@ -1681,7 +1662,7 @@ fn proto_pipe_write(info: TestInfo) -> TestResult {
         println!("Test {}.", test_no);
         run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
             let (pipe_r, pipe_w) =
-                unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();
+                create_pipe(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();
             for (i, line) in test.iter().enumerate().take(test.iter().len() - 1) {
                 if i % 2 == 0 {
                     ctx.prog_write_passthrough(line.clone());
@@ -5375,7 +5356,7 @@ fn main() -> ExitCode {
             waypipe_server: server_file,
         };
 
-        let (read_out, new_stdouterr) = unistd::pipe2(fcntl::OFlag::empty()).unwrap();
+        let (read_out, new_stdouterr) = create_pipe(fcntl::OFlag::empty()).unwrap();
         let new_stdin = fcntl::open(
             "/dev/null",
             fcntl::OFlag::O_RDONLY | fcntl::OFlag::O_NOCTTY,
@@ -5454,7 +5435,7 @@ fn main() -> ExitCode {
                     }
 
                     let mut pfds = [poll::PollFd::new(read_out.as_fd(), poll::PollFlags::POLLIN)];
-                    let res = poll::ppoll(&mut pfds, None, Some(pollmask));
+                    let res = system_poll(&mut pfds, None, Some(pollmask));
                     if let Err(errno) = res {
                         assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
                         continue;

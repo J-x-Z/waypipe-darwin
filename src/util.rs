@@ -1224,3 +1224,144 @@ pub fn timespec_from_sec_nsec(sec: libc::time_t, nsec: libc::c_long) -> libc::ti
     ret.tv_nsec = nsec;
     ret
 }
+
+/** Create an anonymous shared-memory file suitable for passing over Wayland. */
+#[cfg(target_os = "linux")]
+pub fn create_anon_file() -> Result<OwnedFd, String> {
+    use nix::sys::memfd;
+
+    memfd::memfd_create(
+        c"waypipe",
+        memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
+    )
+    .map_err(|x| format!("memfd_create failed: {}", x))
+}
+
+/** Darwin has no memfd_create; unlink a securely-created temporary file instead. */
+#[cfg(not(target_os = "linux"))]
+pub fn create_anon_file() -> Result<OwnedFd, String> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    for _ in 0..16 {
+        let mut random = [0_u8; 16];
+        getrandom::getrandom(&mut random)
+            .map_err(|x| format!("failed to generate temporary file name: {}", x))?;
+        let name = random
+            .iter()
+            .fold(String::with_capacity(32), |mut out, byte| {
+                use std::fmt::Write;
+                let _ = write!(out, "{byte:02x}");
+                out
+            });
+        let path = std::env::temp_dir().join(format!("waypipe-{name}"));
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC)
+            .open(&path)
+        {
+            Ok(file) => {
+                std::fs::remove_file(&path)
+                    .map_err(|x| format!("failed to unlink anonymous file {:?}: {}", path, x))?;
+                return Ok(file.into());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("failed to create anonymous file: {}", error)),
+        }
+    }
+    Err("failed to allocate a unique anonymous file name".into())
+}
+
+/** Create a pipe with pipe2 semantics on platforms that only expose pipe. */
+pub fn create_pipe(flags: fcntl::OFlag) -> nix::Result<(OwnedFd, OwnedFd)> {
+    #[cfg(target_os = "linux")]
+    {
+        unistd::pipe2(flags)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let supported = fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK;
+        if flags.intersects(!supported) {
+            return Err(nix::errno::Errno::EINVAL);
+        }
+        let (read_fd, write_fd) = unistd::pipe()?;
+        for fd in [&read_fd, &write_fd] {
+            if flags.contains(fcntl::OFlag::O_CLOEXEC) {
+                fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFD(fcntl::FdFlag::FD_CLOEXEC))?;
+            }
+            if flags.contains(fcntl::OFlag::O_NONBLOCK) {
+                fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(fcntl::OFlag::O_NONBLOCK))?;
+            }
+        }
+        Ok((read_fd, write_fd))
+    }
+}
+
+/** Create a Unix stream socketpair with portable CLOEXEC/NONBLOCK handling. */
+pub fn create_socketpair(flags: fcntl::OFlag) -> nix::Result<(OwnedFd, OwnedFd)> {
+    use nix::sys::socket;
+
+    let supported = fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK;
+    if flags.intersects(!supported) {
+        return Err(nix::errno::Errno::EINVAL);
+    }
+    #[cfg(target_os = "linux")]
+    let socket_flags = {
+        let mut socket_flags = socket::SockFlag::empty();
+        if flags.contains(fcntl::OFlag::O_CLOEXEC) {
+            socket_flags |= socket::SockFlag::SOCK_CLOEXEC;
+        }
+        if flags.contains(fcntl::OFlag::O_NONBLOCK) {
+            socket_flags |= socket::SockFlag::SOCK_NONBLOCK;
+        }
+        socket_flags
+    };
+    #[cfg(not(target_os = "linux"))]
+    let socket_flags = socket::SockFlag::empty();
+
+    let pair = socket::socketpair(
+        socket::AddressFamily::Unix,
+        socket::SockType::Stream,
+        None,
+        socket_flags,
+    )?;
+    #[cfg(not(target_os = "linux"))]
+    for fd in [&pair.0, &pair.1] {
+        if flags.contains(fcntl::OFlag::O_CLOEXEC) {
+            fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFD(fcntl::FdFlag::FD_CLOEXEC))?;
+        }
+        if flags.contains(fcntl::OFlag::O_NONBLOCK) {
+            fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(fcntl::OFlag::O_NONBLOCK))?;
+        }
+    }
+    Ok(pair)
+}
+
+/** Use ppoll where available and poll on Darwin, which has no ppoll. */
+pub fn system_poll(
+    fds: &mut [nix::poll::PollFd<'_>],
+    timeout: Option<nix::sys::time::TimeSpec>,
+    signal_mask: Option<nix::sys::signal::SigSet>,
+) -> nix::Result<libc::c_int> {
+    #[cfg(target_os = "linux")]
+    {
+        nix::poll::ppoll(fds, timeout, signal_mask)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use nix::poll::PollTimeout;
+        use nix::sys::time::TimeValLike;
+
+        let _ = signal_mask;
+        let timeout = match timeout {
+            Some(value) => {
+                PollTimeout::try_from(value.num_milliseconds()).unwrap_or(PollTimeout::MAX)
+            }
+            None => PollTimeout::NONE,
+        };
+        nix::poll::poll(fds, timeout)
+    }
+}

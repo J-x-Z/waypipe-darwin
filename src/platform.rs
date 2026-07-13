@@ -74,7 +74,7 @@ fn get_rdev_for_file_base(path: &Path) -> Option<u64> {
     /* st_rdev size varies by platform and may be 4 on old
      * architectures, but is typically 8 and always <= 8 */
     #[allow(clippy::useless_conversion)]
-    Some(result.st_rdev.into())
+    Some(result.st_rdev as u64)
 }
 
 /** Get the (`st_rdev`) device id for the special file at `path`, cast to a u64. */

@@ -794,11 +794,7 @@ pub fn compute_diff_span(
 fn test_buffer_replication() {
     use crate::util::AlignedArray;
 
-    let local_fd = nix::sys::memfd::memfd_create(
-        c"/test",
-        nix::sys::memfd::MFdFlags::MFD_CLOEXEC | nix::sys::memfd::MFdFlags::MFD_ALLOW_SEALING,
-    )
-    .unwrap();
+    let local_fd = crate::util::create_anon_file().unwrap();
 
     let size = 4096;
 

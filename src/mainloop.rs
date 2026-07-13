@@ -37,7 +37,7 @@ use nix::errno::Errno;
 use nix::fcntl;
 use nix::libc;
 use nix::poll::{PollFd, PollFlags};
-use nix::sys::{memfd, signal, socket, time, uio};
+use nix::sys::{signal, socket, time, uio};
 use nix::unistd;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1394,11 +1394,8 @@ fn process_sfd_msg(
             // todo: handle error
             let size = i32::from_le_bytes(msg[8..12].try_into().unwrap());
 
-            let local_fd = memfd::memfd_create(
-                c"/waypipe",
-                memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
-            )
-            .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
+            let local_fd = create_anon_file()
+                .map_err(|x| tag!("Failed to create shared-memory file: {:?}", x))?;
 
             unistd::ftruncate(&local_fd, size as libc::off_t)
                 .map_err(|x| tag!("Failed to resize memfd: {:?}", x))?;
@@ -1881,9 +1878,8 @@ fn process_sfd_msg(
         }
 
         WmsgType::OpenIRPipe | WmsgType::OpenIWPipe => {
-            let (pipe_r, pipe_w) =
-                unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
-                    .map_err(|x| tag!("Failed to create pipe: {:?}", x))?;
+            let (pipe_r, pipe_w) = create_pipe(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
+                .map_err(|x| tag!("Failed to create pipe: {:?}", x))?;
 
             let (local_pipe, export_pipe) = if typ == WmsgType::OpenIRPipe {
                 (pipe_r, pipe_w)
@@ -4793,7 +4789,7 @@ fn loop_inner<'a>(
                             w.notify.notify_all();
                         } else {
                             let (wake_r, wake_w) =
-                                unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
+                                create_pipe(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
                                     .map_err(|x| tag!("Failed to create pipe: {}", x))?;
 
                             let wait_state = Arc::new(VulkanWaitThread {
@@ -4939,7 +4935,7 @@ fn loop_inner<'a>(
         }
 
         let zero_timeout = time::TimeSpec::new(0, 0);
-        let res = nix::poll::ppoll(
+        let res = system_poll(
             &mut pfds,
             if work_to_do_now {
                 Some(zero_timeout)
@@ -5486,7 +5482,7 @@ fn loop_end_to_channel(
     while has_from_way_output(&from_way.output) || nwritten_err < endmsg.len() {
         let mut pfds = [PollFd::new(chanfd.as_fd(), PollFlags::POLLOUT)];
 
-        let res = nix::poll::ppoll(&mut pfds, None, Some(*pollmask));
+        let res = system_poll(&mut pfds, None, Some(*pollmask));
 
         if let Err(errno) = res {
             assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
@@ -5547,7 +5543,7 @@ fn loop_error_to_wayland(
     while has_from_chan_output(&from_chan.output) || nwritten_err < errmsg_len {
         let mut pfds = [PollFd::new(progfd.as_fd(), PollFlags::POLLOUT)];
 
-        let res = nix::poll::ppoll(&mut pfds, None, Some(*pollmask));
+        let res = system_poll(&mut pfds, None, Some(*pollmask));
 
         if let Err(errno) = res {
             assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
@@ -5720,7 +5716,7 @@ pub fn main_interface_loop(
         has_first_message: false,
         has_received_close: false,
     };
-    let (wake_r, wake_w) = unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
+    let (wake_r, wake_w) = create_pipe(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
         .map_err(|x| tag!("Failed to create pipe: {}", x))?;
 
     let tasksys = TaskSystem {

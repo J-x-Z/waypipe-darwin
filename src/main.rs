@@ -95,7 +95,7 @@ impl Log for Logger {
                 .file()
                 .unwrap_or("src/unknown")
                 .strip_prefix("src/")
-                .unwrap(),
+                .unwrap_or_else(|| record.file().unwrap_or("unknown")),
             record.line().unwrap_or(0),
             esc2,
             record.args(),
@@ -167,6 +167,11 @@ fn dir_flags() -> fcntl::OFlag {
 
 /** Get a file descriptor corresponding to a path, suitable for `fchdir()` */
 fn open_folder(p: &Path) -> Result<OwnedFd, String> {
+    let p = if p.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        p
+    };
     fcntl::open(
         p,
         dir_flags() | fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY,
@@ -254,6 +259,32 @@ fn wait_for_child(child: Option<std::process::Child>) -> Result<ExitCode, String
             Ok(ExitCode::from(128u8.saturating_add(sig as u8)))
         }
         _ => Err(tag!("Unexpected child process exit status: {:?}", status)),
+    }
+}
+
+fn exit_code_from_wait_status(status: wait::WaitStatus) -> Result<ExitCode, String> {
+    match status {
+        wait::WaitStatus::Exited(_pid, code) => Ok(ExitCode::from(code as u8)),
+        wait::WaitStatus::Signaled(_pid, signal, _coredumped) => {
+            Ok(ExitCode::from(128u8.saturating_add(signal as u8)))
+        }
+        _ => Err(tag!("Unexpected child process exit status: {:?}", status)),
+    }
+}
+
+/** Poll for an exited child and report whether this call reaped it. */
+fn poll_child_exit() -> nix::Result<(wait::WaitStatus, bool)> {
+    #[cfg(target_os = "linux")]
+    {
+        wait::waitid(
+            wait::Id::All,
+            wait::WaitPidFlag::WEXITED | wait::WaitPidFlag::WNOHANG | wait::WaitPidFlag::WNOWAIT,
+        )
+        .map(|status| (status, false))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        wait::waitpid(None, Some(wait::WaitPidFlag::WNOHANG)).map(|status| (status, true))
     }
 }
 
@@ -438,20 +469,9 @@ fn socket_connect(
     nonblocking: bool,
     unlink_after: bool, /* Unlink after connecting? */
 ) -> Result<OwnedFd, String> {
-    let socket_flags = if nonblocking {
-        socket::SockFlag::SOCK_CLOEXEC | socket::SockFlag::SOCK_NONBLOCK
-    } else {
-        socket::SockFlag::SOCK_CLOEXEC
-    };
     let socket = match spec {
         SocketSpec::Unix(path) => {
-            let socket = socket::socket(
-                socket::AddressFamily::Unix,
-                socket::SockType::Stream,
-                socket_flags,
-                None,
-            )
-            .map_err(|x| tag!("Failed to create socket: {}", x))?;
+            let socket = create_unix_stream(nonblocking, true)?;
 
             let file = path
                 .file_name()
@@ -533,6 +553,38 @@ fn socket_connect(
     Ok(socket)
 }
 
+fn create_unix_stream(nonblocking: bool, cloexec: bool) -> Result<OwnedFd, String> {
+    #[cfg(target_os = "linux")]
+    let flags = {
+        let mut flags = socket::SockFlag::empty();
+        if nonblocking {
+            flags |= socket::SockFlag::SOCK_NONBLOCK;
+        }
+        if cloexec {
+            flags |= socket::SockFlag::SOCK_CLOEXEC;
+        }
+        flags
+    };
+    #[cfg(not(target_os = "linux"))]
+    let flags = socket::SockFlag::empty();
+
+    let fd = socket::socket(
+        socket::AddressFamily::Unix,
+        socket::SockType::Stream,
+        flags,
+        None,
+    )
+    .map_err(|x| tag!("Failed to create socket: {}", x))?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        set_cloexec(&fd, cloexec)?;
+        if nonblocking {
+            set_nonblock(&fd)?;
+        }
+    }
+    Ok(fd)
+}
+
 /** Helper structure to unlink a created file when it Drops.
  *
  * This keeps the folder in which the file was created alive. */
@@ -564,15 +616,10 @@ impl Drop for FileCleanup {
 fn unix_socket_create_and_bind(
     path: &Path,
     cwd: &OwnedFd,
-    flags: socket::SockFlag,
+    nonblocking: bool,
+    cloexec: bool,
 ) -> Result<(OwnedFd, FileCleanup), String> {
-    let socket: OwnedFd = socket::socket(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        flags,
-        None,
-    )
-    .map_err(|x| tag!("Failed to create socket: {}", x))?;
+    let socket = create_unix_stream(nonblocking, cloexec)?;
 
     let file = path
         .file_name()
@@ -609,11 +656,19 @@ fn unix_socket_create_and_bind(
 fn socket_create_and_bind(
     path: &SocketSpec,
     cwd: &OwnedFd,
-    flags: socket::SockFlag,
+    nonblocking: bool,
+    cloexec: bool,
 ) -> Result<(OwnedFd, Option<FileCleanup>), String> {
     match path {
         #[cfg(target_os = "linux")]
         SocketSpec::VSock(spec) => {
+            let mut flags = socket::SockFlag::empty();
+            if nonblocking {
+                flags |= socket::SockFlag::SOCK_NONBLOCK;
+            }
+            if cloexec {
+                flags |= socket::SockFlag::SOCK_CLOEXEC;
+            }
             let socket: OwnedFd = socket::socket(
                 socket::AddressFamily::Vsock,
                 socket::SockType::Stream,
@@ -632,7 +687,7 @@ fn socket_create_and_bind(
         SocketSpec::VSock(_) => unreachable!(),
 
         SocketSpec::Unix(path) => {
-            let (socket, cleanup) = unix_socket_create_and_bind(path, cwd, flags)?;
+            let (socket, cleanup) = unix_socket_create_and_bind(path, cwd, nonblocking, cloexec)?;
             Ok((socket, Some(cleanup)))
         }
     }
@@ -701,13 +756,28 @@ fn ignore_sigpipe() -> Result<(), String> {
 
 /** Setup a SIGINT handler, and return a modified poll mask in which SIGINT is not blocked. */
 fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), String> {
-    /* Block SIGINT, except when polling; this prevents a race in which SIGINT is received outside the poll. */
-    let mut mask = signal::SigSet::empty();
-    mask.add(signal::SIGINT);
-    let mut pollmask = mask
-        .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
-        .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
-    pollmask.remove(signal::SIGINT);
+    #[cfg(target_os = "linux")]
+    let pollmask = {
+        /* Block SIGINT except during ppoll, preventing a check-to-wait race. */
+        let mut mask = signal::SigSet::empty();
+        mask.add(signal::SIGINT);
+        let mut pollmask = mask
+            .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
+            .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
+        pollmask.remove(signal::SIGINT);
+        pollmask
+    };
+    #[cfg(not(target_os = "linux"))]
+    let pollmask = {
+        /* Darwin has poll but no ppoll, so SIGINT must remain unblocked. */
+        let mut pollmask =
+            signal::SigSet::thread_get_mask().map_err(|x| tag!("Failed to read sigmask: {}", x))?;
+        pollmask.remove(signal::SIGINT);
+        pollmask
+            .thread_set_mask()
+            .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
+        pollmask
+    };
 
     let sigaction = signal::SigAction::new(
         signal::SigHandler::Handler(sigint_handler),
@@ -731,12 +801,27 @@ fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), Strin
  * inherit signal disposition changes.
  */
 fn setup_sigchld_handler() -> Result<signal::SigSet, String> {
-    let mut mask = signal::SigSet::empty();
-    mask.add(signal::SIGCHLD);
-    let mut pollmask = mask
-        .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
-        .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
-    pollmask.remove(signal::SIGCHLD);
+    #[cfg(target_os = "linux")]
+    let pollmask = {
+        let mut mask = signal::SigSet::empty();
+        mask.add(signal::SIGCHLD);
+        let mut pollmask = mask
+            .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
+            .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
+        pollmask.remove(signal::SIGCHLD);
+        pollmask
+    };
+    #[cfg(not(target_os = "linux"))]
+    let pollmask = {
+        /* Darwin's poll cannot atomically swap masks; keep SIGCHLD interruptible. */
+        let mut pollmask =
+            signal::SigSet::thread_get_mask().map_err(|x| tag!("Failed to read sigmask: {}", x))?;
+        pollmask.remove(signal::SIGCHLD);
+        pollmask
+            .thread_set_mask()
+            .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
+        pollmask
+    };
 
     let sigaction = signal::SigAction::new(
         signal::SigHandler::Handler(noop_signal_handler),
@@ -887,13 +972,8 @@ fn run_server_oneshot(
     socket_path: &SocketSpec,
     cwd: &OwnedFd,
 ) -> Result<ExitCode, String> {
-    let (sock1, sock2) = socket::socketpair(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        None,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-    )
-    .map_err(|x| tag!("Failed to create socketpair: {}", x))?;
+    let (sock1, sock2) = create_socketpair(fcntl::OFlag::O_NONBLOCK | fcntl::OFlag::O_CLOEXEC)
+        .map_err(|x| tag!("Failed to create socketpair: {}", x))?;
 
     let sock_str = format!("{}", sock2.as_raw_fd());
     set_cloexec(&sock2, false)?;
@@ -1013,13 +1093,7 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
 
     /* Creating the non-abstract unix socket now (and binding it last) simplifies
      * the error handling paths slightly. */
-    let unix_socket: OwnedFd = socket::socket(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-        None,
-    )
-    .map_err(|x| tag!("Failed to create socket: {}", x))?;
+    let unix_socket = create_unix_stream(true, true)?;
 
     /* Helper function to ensure abstract_socket is dropped before the lock
      * file is unlinked. Returns Ok(None) on non-fatal error. */
@@ -1333,14 +1407,9 @@ fn run_server_inner(
     loop {
         loop {
             /* Handle any child process exits */
-            let res = wait::waitid(
-                wait::Id::All,
-                wait::WaitPidFlag::WEXITED
-                    | wait::WaitPidFlag::WNOHANG
-                    | wait::WaitPidFlag::WNOWAIT,
-            );
+            let res = poll_child_exit();
             match res {
-                Ok(status) => {
+                Ok((status, reaped)) => {
                     let opid = match status {
                         wait::WaitStatus::Exited(pid, _code) => Some(pid),
                         wait::WaitStatus::Signaled(pid, _signal, _bool) => Some(pid),
@@ -1353,14 +1422,20 @@ fn run_server_inner(
                     };
                     if let Some(pid) = opid {
                         if pid.as_raw() as u32 == cmd_child.id() {
-                            let ret = wait_for_child(Some(cmd_child))?;
+                            let ret = if reaped {
+                                exit_code_from_wait_status(status)?
+                            } else {
+                                wait_for_child(Some(cmd_child))?
+                            };
                             debug!("Exiting, main command has stopped");
                             return Ok(ret);
                         }
                         let mut found = false;
                         if let Some(ref mut xchild) = opt_xchild {
                             if pid.as_raw() as u32 == xchild.id() {
-                                let _ = xchild.wait();
+                                if !reaped {
+                                    let _ = xchild.wait();
+                                }
                                 error!("xwayland-satellite stopped early");
                                 /* Note that the lock file has not been cleaned up
                                  * yet, ensuring X11 clients that attempt to connect
@@ -1407,7 +1482,7 @@ fn run_server_inner(
             pfds_base.as_mut().unwrap()
         };
 
-        let res = nix::poll::ppoll(pfds, None, Some(pollmask));
+        let res = system_poll(pfds, None, Some(pollmask));
         if let Err(errno) = res {
             assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
             continue;
@@ -1496,11 +1571,8 @@ fn run_server_multi(
     let mut conn_strings = Vec::new();
     let conn_args = build_connection_command(&mut conn_strings, socket_path, options, false, false);
 
-    let (display_socket, sock_cleanup) = unix_socket_create_and_bind(
-        &PathBuf::from(display),
-        cwd,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-    )?;
+    let (display_socket, sock_cleanup) =
+        unix_socket_create_and_bind(&PathBuf::from(display), cwd, true, true)?;
 
     let (mut opt_x, mut opt_cleanup) = (None, None);
     if run_xwls {
@@ -1580,8 +1652,7 @@ fn run_client_oneshot(
     socket_path: &SocketSpec,
     cwd: &OwnedFd,
 ) -> Result<ExitCode, String> {
-    let (channel_socket, sock_cleanup) =
-        socket_create_and_bind(socket_path, cwd, socket::SockFlag::SOCK_CLOEXEC)?;
+    let (channel_socket, sock_cleanup) = socket_create_and_bind(socket_path, cwd, false, true)?;
 
     socket::listen(&channel_socket, socket::Backlog::new(1).unwrap())
         .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
@@ -1668,18 +1739,15 @@ fn run_client_inner(
     'outer: loop {
         /* Handle any child process exits (including the case where cmd_child exited immediately)*/
         loop {
-            let res = wait::waitid(
-                wait::Id::All,
-                wait::WaitPidFlag::WEXITED
-                    | wait::WaitPidFlag::WNOHANG
-                    | wait::WaitPidFlag::WNOWAIT,
-            );
+            let res = poll_child_exit();
             match res {
-                Ok(status) => match status {
+                Ok((status, reaped)) => match status {
                     wait::WaitStatus::Exited(pid, _code) => {
                         if let Some(ref mut c) = cmd_child {
                             if pid.as_raw() as u32 == c.id() {
-                                let _ = c.wait();
+                                if !reaped {
+                                    let _ = c.wait();
+                                }
                                 debug!("Exiting, main command has stopped");
                                 break 'outer;
                             }
@@ -1689,7 +1757,9 @@ fn run_client_inner(
                     wait::WaitStatus::Signaled(pid, _signal, _bool) => {
                         if let Some(ref mut c) = cmd_child {
                             if pid.as_raw() as u32 == c.id() {
-                                let _ = c.wait();
+                                if !reaped {
+                                    let _ = c.wait();
+                                }
                                 debug!("Exiting, main command has stopped");
                                 break 'outer;
                             }
@@ -1716,7 +1786,7 @@ fn run_client_inner(
 
         /* Wait for SIGCHLD or socket connection */
         let mut pfds = [PollFd::new(channel_socket.as_fd(), PollFlags::POLLIN)];
-        let res = nix::poll::ppoll(&mut pfds, None, Some(pollmask));
+        let res = system_poll(&mut pfds, None, Some(pollmask));
         if let Err(errno) = res {
             assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
             continue;
@@ -1785,11 +1855,7 @@ fn run_client_multi(
         anti_staircase,
     );
 
-    let (channel_socket, sock_cleanup) = socket_create_and_bind(
-        socket_path,
-        cwd,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-    )?;
+    let (channel_socket, sock_cleanup) = socket_create_and_bind(socket_path, cwd, true, true)?;
 
     let mut connections = BTreeMap::new();
     let cmd_child = run_client_inner(
@@ -1877,11 +1943,7 @@ fn setup_secctx(
         secctx_sock_path
     );
 
-    let (sock, sock_cleanup) = unix_socket_create_and_bind(
-        &secctx_sock_path,
-        cwd,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
-    )?;
+    let (sock, sock_cleanup) = unix_socket_create_and_bind(&secctx_sock_path, cwd, true, true)?;
 
     socket::listen(&sock, socket::Backlog::MAXCONN)
         .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
@@ -1899,7 +1961,7 @@ fn setup_secctx(
     fcntl::fcntl(&wayland_conn, fcntl::FcntlArg::F_SETFL(flags))
         .map_err(|x| tag!("Failed to set wayland socket flags: {}", x))?;
 
-    let (close_r, close_w) = unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
+    let (close_r, close_w) = create_pipe(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
         .map_err(|x| tag!("Failed to create pipe: {:?}", x))?;
 
     secctx::provide_secctx(wayland_conn, app_id, sock, close_r)?;

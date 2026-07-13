@@ -12,3 +12,4 @@
 /wrap-zstd/target
 /wrap-gbm/target
 /shaders/target
+.DS_Store

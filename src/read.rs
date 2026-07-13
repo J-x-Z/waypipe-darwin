@@ -432,7 +432,7 @@ fn test_read_buffer() {
 
     let mut rb = ReadBuffer::new();
     let (pipe_r, pipe_w) =
-        unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();
+        crate::util::create_pipe(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();
 
     #[cfg(not(miri))]
     fn read_all(rb: &mut ReadBuffer, fd: &OwnedFd) {

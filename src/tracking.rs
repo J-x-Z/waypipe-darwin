@@ -18,7 +18,6 @@ use crate::*;
 use core::str;
 use log::{debug, error};
 use nix::libc;
-use nix::sys::memfd;
 use nix::unistd;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -3076,11 +3075,8 @@ pub fn process_way_msg(
                 let new_table = process_dmabuf_feedback(feedback)?;
                 if Some(&new_table) != feedback.output_format_table.as_ref() {
                     // Table has changed; send new fd
-                    let local_fd = memfd::memfd_create(
-                        c"/waypipe",
-                        memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
-                    )
-                    .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
+                    let local_fd = create_anon_file()
+                        .map_err(|x| tag!("Failed to create shared-memory file: {:?}", x))?;
                     let sz: u32 = new_table.len().try_into().unwrap();
                     assert!(sz > 0);
 
