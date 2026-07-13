@@ -11,6 +11,8 @@ class WaypipeDarwin < Formula
 
   def install
     ENV.prepend_path "PATH", Formula["rust"].opt_bin
+    ENV.prepend_path "PKG_CONFIG_PATH", Formula["lz4"].opt_lib/"pkgconfig"
+    ENV.prepend_path "PKG_CONFIG_PATH", Formula["zstd"].opt_lib/"pkgconfig"
     system "cargo", "install", *std_cargo_args,
            "--no-default-features", "--features", "lz4,zstd"
   end
