@@ -38,6 +38,18 @@ if get_option('build_rs')
     has_gbm = false
     has_dmabuf = 'false'
     has_video = false
+    is_linux = host_machine.system() == 'linux'
+
+    # DMA-BUF, GBM and the video path depend on Linux kernel APIs such as
+    # eventfd and DRM ioctls. MoltenVK can satisfy the Vulkan probe on macOS,
+    # but it cannot make those Linux interfaces available.
+    if not is_linux
+        foreach option_name : ['with_dmabuf', 'with_gbm', 'with_video']
+            if get_option(option_name).enabled()
+                error('@0@ is only supported on Linux'.format(option_name))
+            endif
+        endforeach
+    endif
 
     # compute maximum of with_lz4/with_zstd/with_gbm/with_video features
     max_feature = get_option('with_lz4')
@@ -46,15 +58,17 @@ if get_option('build_rs')
     ).auto())
         max_feature = get_option('with_zstd')
     endif
-    if (max_feature.auto() and get_option('with_gbm').enabled()) or (not max_feature.enabled() and get_option(
-        'with_gbm',
-    ).auto())
-        max_feature = get_option('with_gbm')
-    endif
-    if (max_feature.auto() and get_option('with_video').enabled()) or (not max_feature.enabled() and get_option(
-        'with_video',
-    ).auto())
-        max_feature = get_option('with_video')
+    if is_linux
+        if (max_feature.auto() and get_option('with_gbm').enabled()) or (not max_feature.enabled() and get_option(
+            'with_gbm',
+        ).auto())
+            max_feature = get_option('with_gbm')
+        endif
+        if (max_feature.auto() and get_option('with_video').enabled()) or (not max_feature.enabled() and get_option(
+            'with_video',
+        ).auto())
+            max_feature = get_option('with_video')
+        endif
     endif
 
     bindgen = find_program(
@@ -81,39 +95,41 @@ if get_option('build_rs')
         has_zstd = true
         features += ['zstd']
     endif
-    libgbm = dependency(
-        'gbm',
-        version: '>=11.0.0',  # gbm is part of Mesa and has a matching version
-        required: get_option('with_gbm'),
-    )
-    if bindgen.found() and libgbm.found()
-        has_dmabuf = 'gbm'
-        features += ['gbmfallback']
-    endif
-    libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
-    if libvulkan.found()
-        # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
-        has_dmabuf = 'true'
-        features += ['dmabuf']
-    endif
-    glslc = find_program(
-        'glslc',
-        native: true,
-        required: get_option('with_video'),
-    )
-    libavutil = dependency(
-        'libavutil',
-        version: '>=58.11.100',
-        required: get_option('with_video'),
-    )
-    libavcodec = dependency(
-        'libavcodec',
-        version: '>=59.0.100',
-        required: get_option('with_video'),
-    )
-    if bindgen.found() and libavcodec.found() and libavutil.found() and glslc.found()
-        has_video = true
-        features += ['video']
+    if is_linux
+        libgbm = dependency(
+            'gbm',
+            version: '>=11.0.0',  # gbm is part of Mesa and has a matching version
+            required: get_option('with_gbm'),
+        )
+        if bindgen.found() and libgbm.found()
+            has_dmabuf = 'gbm'
+            features += ['gbmfallback']
+        endif
+        libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
+        if libvulkan.found()
+            # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
+            has_dmabuf = 'true'
+            features += ['dmabuf']
+        endif
+        glslc = find_program(
+            'glslc',
+            native: true,
+            required: get_option('with_video'),
+        )
+        libavutil = dependency(
+            'libavutil',
+            version: '>=58.11.100',
+            required: get_option('with_video'),
+        )
+        libavcodec = dependency(
+            'libavcodec',
+            version: '>=59.0.100',
+            required: get_option('with_video'),
+        )
+        if bindgen.found() and libavcodec.found() and libavutil.found() and glslc.found()
+            has_video = true
+            features += ['video']
+        endif
     endif
 
     target_dir = meson.project_build_root() / 'target'
