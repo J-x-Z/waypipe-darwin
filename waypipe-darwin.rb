@@ -10,6 +10,7 @@ class WaypipeDarwin < Formula
   depends_on "zstd"
 
   def install
+    ENV.prepend_path "PATH", Formula["rust"].opt_bin
     system "cargo", "install", *std_cargo_args,
            "--no-default-features", "--features", "lz4,zstd"
   end
