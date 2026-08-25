@@ -2261,7 +2261,10 @@ pub fn vulkan_import_dmabuf(
                 .fd(fd.into_raw_fd())
                 .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
 
-            let mut dedicate_info = vk::MemoryDedicatedAllocateInfo::default().image(image);
+            let mut dedicate_info = vk::MemoryDedicatedAllocateInfo::default();
+            if format_info.planes == 1 {
+                dedicate_info = dedicate_info.image(image);
+            }
 
             let alloc_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(req_out.memory_requirements.size)
@@ -2461,10 +2464,14 @@ pub fn vulkan_create_dmabuf(
                 drm_format, props.drm_format_modifier, width, height, import_size_limit.0, import_size_limit.1);
         }
 
+        let mut bind_planes: Vec<vk::BindImagePlaneMemoryInfo> = (0..nplanes)
+            .map(|i| vk::BindImagePlaneMemoryInfo::default().plane_aspect(memory_plane(i)))
+            .collect();
+
         let mut bind_infos: Vec<vk::BindImageMemoryInfoKHR<'_>> = Vec::new(); // todo: fixed size array
         let mut planes = Vec::<AddDmabufPlane>::new();
         let mut mem_fds = Vec::new();
-        for plane in 0..nplanes {
+        for (plane, bind_plane) in bind_planes.iter_mut().enumerate() {
             let plane_aspect = memory_plane(plane);
             let mut req_plane_info =
                 vk::ImagePlaneMemoryRequirementsInfo::default().plane_aspect(plane_aspect);
@@ -2488,7 +2495,10 @@ pub fn vulkan_create_dmabuf(
 
             let mut export_info = vk::ExportMemoryAllocateInfoKHR::default()
                 .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-            let mut dedicate_info = vk::MemoryDedicatedAllocateInfo::default().image(image);
+            let mut dedicate_info = vk::MemoryDedicatedAllocateInfo::default();
+            if format_info.planes == 1 {
+                dedicate_info = dedicate_info.image(image);
+            }
             let alloc_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(req_out.memory_requirements.size)
                 .memory_type_index(mem_index)
@@ -2505,12 +2515,16 @@ pub fn vulkan_create_dmabuf(
                 }
             };
 
-            bind_infos.push(
-                vk::BindImageMemoryInfo::default()
-                    .image(image)
-                    .memory(mem)
-                    .memory_offset(0),
-            );
+            let bind_info = vk::BindImageMemoryInfo::default()
+                .image(image)
+                .memory(mem)
+                .memory_offset(0);
+
+            bind_infos.push(if nplanes > 1 {
+                bind_info.push_next(bind_plane)
+            } else {
+                bind_info
+            });
 
             let memory_fd_get_info = vk::MemoryGetFdInfoKHR::default()
                 .memory(mem)
