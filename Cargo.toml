@@ -3,7 +3,7 @@ exclude = ["fuzz"]
 
 [package]
 name = "waypipe"
-version = "0.11.1"
+version = "0.11.2"
 # To ensure Waypipe can still be built on older/unupdated systems, do
 # not update the edition or version unless necessary.
 edition = "2021"
