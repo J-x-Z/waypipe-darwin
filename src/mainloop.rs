@@ -3119,7 +3119,7 @@ fn run_dmabuf_fill_task_2(task: FillDmabufTask2, cache: &mut ThreadCache) -> Tas
     msg.truncate(align4(msg_len));
 
     let header = cat4x4(
-        build_wmsg_header(WmsgType::BufferFill, msg_len as usize).to_le_bytes(),
+        build_wmsg_header(WmsgType::BufferFill, msg_len).to_le_bytes(),
         task.rid.0.to_le_bytes(),
         task.region_start.to_le_bytes(),
         task.region_end.to_le_bytes(),
@@ -3771,12 +3771,7 @@ fn process_channel(
 ) -> Result<(), String> {
     debug!("Process channel");
 
-    loop {
-        let Some(ref mut msg_view) = &mut chan_msg.next_msg else {
-            /* No more messages */
-            break;
-        };
-
+    while let Some(ref mut msg_view) = &mut chan_msg.next_msg {
         let data = msg_view.get_mut();
         let header = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let (length, typ) = parse_wmsg_header(header)

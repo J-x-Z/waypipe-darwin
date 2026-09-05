@@ -596,7 +596,7 @@ pub unsafe fn setup_video(
     dev: &Device,
     pdev_info: &DeviceInfo,
     debug: bool,
-    qfis: [Option<u32>; 4],
+    queue_info: &[(vk::QueueFlags, vk::VideoCodecOperationFlagsKHR, i32, i32)],
     device_exts: &[*const c_char],
     instance_exts: &[*const c_char],
 ) -> Result<Option<VulkanVideo>, String> {
@@ -663,16 +663,16 @@ pub unsafe fn setup_video(
 
         /* Note: the queue_family_indices are deprecated and will be replaced
          * by `.qf`/`.nb_qf` */
-        ctx.queue_family_tx_index = qfis[0].map_or(-1, |v| v.try_into().unwrap());
-        ctx.queue_family_comp_index = qfis[0].map_or(-1, |v| v.try_into().unwrap());
-        ctx.queue_family_index = qfis[1].map_or(-1, |v| v.try_into().unwrap());
-        ctx.queue_family_encode_index = qfis[2].map_or(-1, |v| v.try_into().unwrap());
-        ctx.queue_family_decode_index = qfis[3].map_or(-1, |v| v.try_into().unwrap());
-        ctx.nb_graphics_queues = 1;
-        ctx.nb_tx_queues = 1;
-        ctx.nb_comp_queues = 1;
-        ctx.nb_encode_queues = 1;
-        ctx.nb_decode_queues = 1;
+        for (i, (flags, codec_ops, index, nbound)) in queue_info.iter().enumerate() {
+            let Some(qf) = ctx.qf.get_mut(i) else {
+                continue;
+            };
+            qf.idx = *index;
+            qf.num = *nbound;
+            qf.flags = flags.as_raw();
+            qf.video_caps = codec_ops.as_raw();
+        }
+        ctx.nb_qf = i32::try_from(queue_info.len().min(ctx.qf.len())).unwrap();
 
         av_hwdevice_ctx_init(&lib, device_ref)?;
 

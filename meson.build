@@ -4,7 +4,7 @@ project(
     license: ['GPL3+', 'MIT/Expat'],
     meson_version: '>=0.56.0',
     default_options: ['c_std=c11', 'warning_level=3', 'werror=true'],
-    version: '0.11.0',
+    version: '0.11.2',
 )
 
 # mention version
@@ -117,7 +117,7 @@ if get_option('build_rs')
         )
         libavutil = dependency(
             'libavutil',
-            version: '>=58.11.100',
+            version: '>=60.13.100',
             required: get_option('with_video'),
         )
         libavcodec = dependency(

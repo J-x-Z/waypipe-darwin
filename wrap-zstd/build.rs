@@ -12,10 +12,7 @@ fn depfile_to_cargo(path: &std::path::Path) {
     let mut chunks: Vec<String> = Vec::new();
     assert!(!data.contains(&0));
     let mut scan = data.into_iter();
-    loop {
-        let Some(c) = scan.next() else {
-            break;
-        };
+    while let Some(c) = scan.next() {
         if c == b'\\' {
             // TODO: how does Cargo handle escapes in path names? Or invalid utf8?
             let d = scan.next().unwrap();

@@ -1991,7 +1991,7 @@ fn locate_openssh_cmd_hostname(ssh_args: &[&OsStr]) -> Result<(usize, bool), Str
         if base_arg.len() == 1 {
             return Err(tag!("Failed to parse arguments after ssh: single '-'?"));
         }
-        if base_arg == [b'-', b'-'] {
+        if base_arg == b"--" {
             /* No arguments after -- */
             dst_idx += 1;
             break;

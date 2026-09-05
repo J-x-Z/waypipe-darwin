@@ -3483,8 +3483,8 @@ fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
                     "initial mismatch {} {}\n{:?}\n{:?}\n{:?}\n{:?}",
                     dup.len(),
                     base.len(),
-                    &dup,
-                    &base,
+                    dup,
+                    base,
                     freq_counts(&dup),
                     freq_counts(&base),
                 );

@@ -172,7 +172,7 @@ handled_funcs = set(handled_funcs)
 handled_enums = set([("wl_output", "transform"), ("wl_shm", "format")])
 
 header = """/*! Wayland protocol interface and method data and functions. Code automatically generated from protocols/ folder. */
-#![allow(clippy::all,dead_code)]
+#![allow(clippy::all, dead_code, missing_docs)]
 use crate::wayland::*;
 use crate::wayland::WaylandArgument::*;
 use WaylandInterface::*;
