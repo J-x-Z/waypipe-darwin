@@ -2,7 +2,7 @@ Waypipe-Darwin
 ================================================================================
 
 This fork keeps Waypipe usable as a native macOS client while staying close to
-the upstream 0.11 codebase. The Darwin-specific work covers shared memory,
+the upstream 0.11.2 codebase. The Darwin-specific work covers shared memory,
 Unix sockets, process handling, and the transport path used by Cocoa-Way.
 
 `waypipe` is a proxy for [Wayland][l0] clients. It forwards Wayland messages and
@@ -16,8 +16,27 @@ application forwarding similar to [`ssh -X`][l1] feasible.
 
 ```bash
 brew tap J-x-Z/tap
+brew update
 brew install waypipe-darwin
 ```
+
+For an existing installation, run `brew upgrade waypipe-darwin`.
+
+### Build on macOS
+
+After installing Rust, bindgen, pkg-config, lz4, and zstd with your package
+manager, build the native transport client with:
+
+```bash
+cargo build --release --locked --no-default-features --features lz4,zstd
+./target/release/waypipe --version
+```
+
+Meson also detects these libraries through pkg-config. It keeps Linux-only
+DMA-BUF, GBM, and video support disabled on macOS, even if a Vulkan loader is
+installed. This avoids the Linux `eventfd` build errors without disabling
+those features on a Linux server. With MacPorts, make sure `/opt/local/bin`
+is on `PATH` and its library metadata is visible to pkg-config.
 
 ## Usage
 
@@ -93,7 +112,7 @@ Optional linked dependencies, broken out by feature:
   - bindgen (build, ≥ 0.70.0)
 - video encoding/decoding support:
   - dmabuf support
-  - ffmpeg (≥ 7.1, needs avcodec/avutil for lossy video encoding)
+  - ffmpeg (≥ 8.0, needs avcodec/avutil for lossy video encoding)
   - bindgen (build, ≥ 0.70.0)
   - glslc (build, to compile shaders for image format conversion)
 
